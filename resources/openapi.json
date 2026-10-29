@@ -1,0 +1,476 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Postback Service API",
+    "version": "1.0.0",
+    "description": "Receive and inspect advertising events. Try it out sends real requests to this running service. Accepted means durably received; inspect /events for the partner delivery outcome. Duplicate events within the original 24-hour window are not delivered again."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Current service"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Postbacks",
+      "description": "Receive postbacks and inspect processing results."
+    },
+    {
+      "name": "Health",
+      "description": "Application health."
+    }
+  ],
+  "paths": {
+    "/postback": {
+      "get": {
+        "tags": [
+          "Postbacks"
+        ],
+        "operationId": "receivePostback",
+        "summary": "Receive a postback",
+        "description": "Persists a new event and synchronously attempts partner delivery (up to three attempts). The identity is click_id + event + normalized amount. Repeating 49.90 as 49.9 is a duplicate for 24 hours. This GET changes state and may send an event to the configured partner. Only URL query parameters are accepted; a GET body is ignored. HEAD requests return 405 without side effects.",
+        "parameters": [
+          {
+            "name": "click_id",
+            "in": "query",
+            "required": true,
+            "description": "Nonblank UTF-8 click identifier; no control bytes. Preserved as supplied.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "example": "swagger_demo_001"
+          },
+          {
+            "name": "event",
+            "in": "query",
+            "required": true,
+            "description": "Nonblank UTF-8 event name; no control bytes.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "example": "purchase"
+          },
+          {
+            "name": "amount",
+            "in": "query",
+            "required": true,
+            "description": "Nonnegative decimal, supplied as text to preserve precision. Supports .5 and scientific notation. Maximum 128 input characters, 18 integer digits and 8 fractional places after normalization. Negative zero is valid; NaN/INF are invalid.",
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "example": "49.90"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Event received or already received.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Accepted"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Duplicate"
+                    }
+                  ]
+                },
+                "examples": {
+                  "accepted": {
+                    "value": {
+                      "status": "accepted",
+                      "message": "Event received"
+                    }
+                  },
+                  "duplicate": {
+                    "value": {
+                      "status": "duplicate",
+                      "message": "Event already received"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Missing or invalid query parameters.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidParameters"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Persistence unavailable; event was not durably accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceUnavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/events": {
+      "get": {
+        "tags": [
+          "Postbacks"
+        ],
+        "operationId": "listPostbacks",
+        "summary": "Inspect received events and delivery results",
+        "description": "Newest first, 50 events per page. If INSPECTION_TOKEN is configured, use Authorize to provide it. The token is optional only when configuration leaves it unset. pending/sending may indicate an interrupted process; failed can also be visible between retry attempts.",
+        "security": [
+          {},
+          {
+            "inspectionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "description": "Page number.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated receipts and processing status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostbackPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Inspection token missing or incorrect.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "message"
+                  ],
+                  "properties": {
+                    "message": {
+                      "type": "string",
+                      "enum": [
+                        "Unauthorized"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/up": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "operationId": "healthCheck",
+        "summary": "Check Laravel application health",
+        "description": "Application boot health; does not independently check MySQL, Redis or the partner API.",
+        "responses": {
+          "200": {
+            "description": "Application booted successfully.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Application health check failed."
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "inspectionBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Value of INSPECTION_TOKEN, when configured. Enter the token without the Bearer prefix."
+      }
+    },
+    "schemas": {
+      "Accepted": {
+        "type": "object",
+        "required": [
+          "status",
+          "message"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "accepted"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "enum": [
+              "Event received"
+            ]
+          }
+        }
+      },
+      "Duplicate": {
+        "type": "object",
+        "required": [
+          "status",
+          "message"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "duplicate"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "enum": [
+              "Event already received"
+            ]
+          }
+        }
+      },
+      "InvalidParameters": {
+        "type": "object",
+        "required": [
+          "status",
+          "message"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "error"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "enum": [
+              "Invalid parameters"
+            ]
+          }
+        }
+      },
+      "ServiceUnavailable": {
+        "type": "object",
+        "required": [
+          "status",
+          "message"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "error"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "enum": [
+              "Service unavailable"
+            ]
+          }
+        }
+      },
+      "Postback": {
+        "type": "object",
+        "required": [
+          "id",
+          "identity_hash",
+          "click_id",
+          "event",
+          "original_amount",
+          "amount",
+          "received_at",
+          "status",
+          "attempts",
+          "last_http_status",
+          "last_error",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "example": 1
+          },
+          "identity_hash": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "description": "SHA-256 of the canonical identity tuple."
+          },
+          "click_id": {
+            "type": "string",
+            "example": "swagger_demo_001"
+          },
+          "event": {
+            "type": "string",
+            "example": "purchase"
+          },
+          "original_amount": {
+            "type": "string",
+            "example": "49.90"
+          },
+          "amount": {
+            "type": "string",
+            "description": "Canonical decimal string; avoids loss of precision in clients.",
+            "example": "49.9"
+          },
+          "received_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "sending",
+              "succeeded",
+              "failed"
+            ],
+            "example": "succeeded"
+          },
+          "attempts": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3,
+            "example": 1
+          },
+          "last_http_status": {
+            "type": "integer",
+            "nullable": true,
+            "example": 200
+          },
+          "last_error": {
+            "type": "string",
+            "nullable": true,
+            "description": "Safe code, e.g. network_error, http_503 or invalid_partner_configuration."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "PostbackPage": {
+        "type": "object",
+        "required": [
+          "data",
+          "current_page",
+          "per_page",
+          "total",
+          "last_page"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Postback"
+            }
+          },
+          "current_page": {
+            "type": "integer",
+            "example": 1
+          },
+          "per_page": {
+            "type": "integer",
+            "enum": [
+              50
+            ]
+          },
+          "total": {
+            "type": "integer",
+            "example": 1
+          },
+          "last_page": {
+            "type": "integer",
+            "example": 1
+          },
+          "first_page_url": {
+            "type": "string"
+          },
+          "last_page_url": {
+            "type": "string"
+          },
+          "next_page_url": {
+            "type": "string",
+            "nullable": true
+          },
+          "prev_page_url": {
+            "type": "string",
+            "nullable": true
+          },
+          "path": {
+            "type": "string"
+          },
+          "from": {
+            "type": "integer",
+            "nullable": true
+          },
+          "to": {
+            "type": "integer",
+            "nullable": true
+          },
+          "links": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "url": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "label": {
+                  "type": "string"
+                },
+                "active": {
+                  "type": "boolean"
+                },
+                "page": {
+                  "type": "integer",
+                  "nullable": true
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
